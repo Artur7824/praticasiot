@@ -1,0 +1,141 @@
+// --- Pinos de Hardware ---
+// LED RGB (ANODO COMUM)
+#define PIN_R 25
+#define PIN_G 26
+#define PIN_B 27
+// Sensor LDR (Analógico)
+#define LDR_PIN 34
+// Sensor HC-SR04
+#define TRIG_PIN 5
+#define ECHO_PIN 18
+// Botão (com INPUT_PULLUP - Pressionado = LOW)
+#define PIN_BUTTON 14
+
+// --- Limiares de Controle ---
+// Luminosidade: Valores > 550 são considerados CLAROS
+#define LDR_THRESHOLD 550
+// Distância de ALERTA em cm: Qualquer objeto abaixo de 100 cm
+#define DISTANCE_ALERT_CM 100
+
+// --- Variáveis de Estado ---
+bool systemState = false;      // O sistema de controle de LED começa DESLIGADO
+bool lastButtonState = HIGH;   // Estado anterior do botão (HIGH porque é INPUT_PULLUP)
+long lastSerialPrintTime = 0; 
+const long printInterval = 2000; // Intervalo de 2 segundos (2000 ms)
+
+// --- Função para Medir a Distância com o HC-SR04 ---
+long medirDistancia() {
+  // Garante que o Trig esteja em LOW antes de iniciar
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  // Pulso de 10us para ativar o sensor
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  
+  // Mede a duração do pulso de retorno (Echo)
+  // Timeout de 25000us (aprox. 4.29m)
+  long duracao = pulseIn(ECHO_PIN, HIGH, 25000); 
+  // Converte a duração em distância (cm)
+  // Velocidade do som: 0.034 cm/us. Divide por 2 (ida e volta)
+  long distancia = duracao * 0.034 / 2;
+  
+  // Retorna 0 se o timeout ocorrer ou se for muito próximo (ruído)
+  return distancia;
+}
+
+// --- Função para Escrever Cores no LED RGB (Ânodo Comum) ---
+// r_val, g_val, b_val devem ser valores de 0 (OFF) a 255 (ON Máximo)
+void write_anode(int r_val, int g_val, int b_val) {
+  // Ânodo Comum: 0V (LOW / analogWrite 255) = OFF; 3.3V (HIGH / analogWrite 0) = ON Máximo
+  // Usamos 255 - valor para inverter a lógica
+  analogWrite(PIN_R, 255 - r_val);
+  analogWrite(PIN_G, 255 - g_val);
+  analogWrite(PIN_B, 255 - b_val);
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Configuração dos pinos de LED e Sensores
+  pinMode(PIN_R, OUTPUT);
+  pinMode(PIN_G, OUTPUT);
+  pinMode(PIN_B, OUTPUT);
+  pinMode(PIN_BUTTON, INPUT_PULLUP); // Usa resistor pull-up interno
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // Inicializa o LED RGB em estado "OFF" (255 para Ânodo Comum)
+  write_anode(0, 0, 0);
+  Serial.println("Sistema ESP32 Inicializado.");
+  Serial.println("Pressione o botão para LIGAR/DESLIGAR o controle do LED.");
+}
+
+void loop() {
+  // --- Lógica do Botão (Alterna o systemState) ---
+  bool buttonState = digitalRead(PIN_BUTTON);
+  
+  // Detecta a transição de solto (HIGH) para pressionado (LOW)
+  if (buttonState == LOW && lastButtonState == HIGH) {
+    systemState = !systemState; 
+    Serial.print("Sistema agora está: ");
+    Serial.println(systemState ? "LIGADO" : "DESLIGADO");
+    
+    // Se desligar, garante que o LED apague imediatamente
+    if (!systemState) {
+      write_anode(0, 0, 0); 
+    }
+    delay(200); // debounce simples
+  }
+  lastButtonState = buttonState;
+
+  // --- Leitura dos Sensores ---
+  long distancia = medirDistancia();
+  int ldrValue = analogRead(LDR_PIN); 
+  
+  // --- Lógica do LED RGB (Ativa apenas se systemState for true) ---
+  if (systemState == true) {
+    
+    // 1. Condição VERMELHO (Prioridade 1: Distância menor que 100 cm)
+    // Se a distância for válida (> 0) e menor que 100 cm.
+    if (distancia > 0 && distancia < DISTANCE_ALERT_CM) {
+      write_anode(255, 0, 0); // Vermelho sólido
+      
+    // 2. Condição VERDE (Prioridade 2: Distância segura E Luz CLARA)
+    } else if (ldrValue > LDR_THRESHOLD) { 
+      write_anode(0, 255, 0); // Verde forte
+      
+    // 3. Condição AMARELO (Prioridade 3: Distância segura E Luz ESCURA/MÉDIA)
+    // Se não for vermelho e a luminosidade for <= 550
+    } else if (ldrValue <= LDR_THRESHOLD) {
+      write_anode(255, 255, 0); // Amarelo (R: ON, G: ON, B: OFF)
+      
+    } else {
+      // Caso a distância seja 0 (erro de leitura/fora de alcance) e não tenha prioridade de cor
+      write_anode(0, 0, 0); // Apagado
+    }
+    
+  } else {
+    // Se o systemState for false, garante que o LED esteja apagado
+    write_anode(0, 0, 0); 
+  }
+
+  // --- Impressão Serial a cada 2 segundos (Não bloqueante) ---
+  unsigned long currentMillis = millis();
+  if (currentMillis - lastSerialPrintTime >= printInterval) {
+    lastSerialPrintTime = currentMillis;
+
+    Serial.println("--- Leitura Sensores ---");
+    Serial.print("Estado do Sistema: ");
+    Serial.println(systemState ? "LIGADO" : "DESLIGADO");
+    Serial.print("LDR (Luminosidade): ");
+    Serial.print(ldrValue);
+    Serial.println(ldrValue > LDR_THRESHOLD ? " (Claro)" : " (Escuro/Médio)");
+    Serial.print("Distancia HC-SR04: ");
+    Serial.print(distancia);
+    Serial.println(" cm");
+    Serial.println("------------------------");
+  }
+  
+  delay(10); // Pequeno delay para estabilidade do loop
+}
