@@ -1,0 +1,175 @@
+#include <DHT.h>
+#include <DHt_U.h>
+//#include <esp_wifi.h>
+#include <ESP32Servo.h>
+#include <PubSubClient.h>
+#include <InfluxDbClient.h>
+#include <InfluxDbCloud.h>
+#include <WiFiMulti.h>
+//#include <ESP8266WiFiMulti.h>
+
+const char* ssid = "CIMATEC_VISITANTES";
+const char* password = "";
+const char* mqtt_server = "broker.hivemq.com";
+const int mqtt_port = 1883;
+
+#if defined(ESP32)
+  WiFiMulti wifiMulti;
+  #define DEVICE "ESP32"
+  #elif defined(ESP8266)
+  ESP8266WiFiMulti wifiMulti;
+  #define DEVICE "ESP8266"
+  #endif
+
+// WiFi AP SSID
+  #define WIFI_SSID "Wild'Phone"
+  #define WIFI_PASSWORD "Selvagem"
+  
+  #define INFLUXDB_URL "https://us-east-1-1.aws.cloud2.influxdata.com"
+  #define INFLUXDB_TOKEN "QCCEUTpPbrLKw5dh5P-xzXJ_qidKF3kzEVv9JRlV9-s74Mhqw0TAvbLbhJfx_42BUIEVAwMFROADP9BJVcnosw=="
+  #define INFLUXDB_ORG "ac342d73b369637c"
+  #define INFLUXDB_BUCKET "av3 iot"
+  
+  // Time zone info
+  #define TZ_INFO "UTC-3"
+  
+  // Declare InfluxDB client instance with preconfigured InfluxCloud certificate
+  InfluxDBClient client(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, InfluxDbCloud2CACert);
+  
+  // Declare Data point
+  Point sensor("wifi_status");
+
+//WiFiClient BarretoESP;
+//PubSubClient client(BarretoESP);
+
+const int LDRpin = 2;
+const int ledRedPin = 14;
+const int ServoPin = 19;
+const int button = 35;
+
+//variaveis de calculo
+const float GAMMA = 0.7;
+const float RL10 = 10;
+float max_lux = 2000; 
+float limit_lux = ((max_lux/100)*30);
+
+
+bool SYS_ENABLE = true;
+bool LED_STATE = false;
+
+//macros de funções
+#define DHTTYPE DHT22
+#define DHTpin  25
+Servo Servo1;
+DHT dht(DHTpin, DHTTYPE);
+
+/*
+void setup_wifi() {
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi conectado");
+  Serial.println(WiFi.localIP());
+}
+
+void reconnect() {
+  while (!client.connected()) {
+    if (client.connect("ESP32Client")) {
+      client.subscribe("esp32/porta");
+    } else {
+      delay(5000);
+    }
+  }
+}
+*/
+
+void IRAM_ATTR rotina_botao(){
+  SYS_ENABLE = !SYS_ENABLE;
+}
+
+void setup() {
+
+  Serial.begin(115200);
+  WiFi.mode(WIFI_STA);
+  wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
+  
+  Serial.print("Connecting to wifi");
+  while (wifiMulti.run() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(100);
+  }
+  Serial.println();
+  
+  timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov");
+
+  pinMode(ledRedPin, OUTPUT);
+  pinMode(LDRpin, INPUT);
+
+  Servo1.attach(ServoPin, 500, 2400); // PWM para ESP32
+
+  Servo1.write(0); // Porta fechada inicialmente
+
+   if (client.validateConnection()) {
+      Serial.print("Connected to InfluxDB: ");
+      Serial.println(client.getServerUrl());
+    } else {
+      Serial.print("InfluxDB connection failed: ");
+      Serial.println(client.getLastErrorMessage());
+    }
+  }
+  //attachInterrupt(digitalPinToInterrupt(button), rotina_botao, FALLING);
+}
+
+
+void loop() {
+  float temp = dht.readTemperature();
+  float humidity = dht.readHumidity();
+
+  int analogValue = analogRead(LDRpin);
+  float voltage = analogValue * 3.3 / 4095.0;
+  float resistance = 10000 * voltage / (3.3 - voltage);
+  float lux = (pow(RL10 * 1e3 * pow(10, GAMMA) / resistance, (1 / GAMMA)))*10;
+
+  if(temp > 26 && SYS_ENABLE == true){
+    Servo1.write(90);
+  }
+
+  if(lux < limit_lux && SYS_ENABLE == true){
+    digitalWrite(ledRedPin, HIGH);
+  }
+  sensor.addTag("device", DEVICE);
+  sensor.addTag("SSID", WiFi.SSID());
+
+  sensor.addField("Temperatura", dht.readTemperature());
+  sensor.addField("umidade", dht.readHumidity());
+  sensor.addField("Servo_pos", Servo1.read());
+  
+    // Print what are we exactly writing
+  Serial.print("Writing: ");
+  Serial.println(sensor.toLineProtocol());
+  
+    // Check WiFi connection and reconnect if needed
+    if (wifiMulti.run() != WL_CONNECTED) {
+      Serial.println("Wifi connection lost");
+    }
+  
+    // Write point
+    if (!client.writePoint(sensor)) {
+      Serial.print("InfluxDB write failed: ");
+      Serial.println(client.getLastErrorMessage());
+    }
+  
+    Serial.println("Waiting 1 second");
+    delay(1000);
+
+  Serial.print("LED STATUS: "); Serial.println(LED_STATE ? "LED aceso" : "LED apagado");
+  Serial.print("Temperatura: "); Serial.print(temp); Serial.println(" ºC");
+  Serial.print("Umidade: "); Serial.print(humidity); Serial.println(" %H ");
+  Serial.print("Lux: "); Serial.println(lux);
+  Serial.print("Sistema: "); Serial.println(SYS_ENABLE ? "Ativo" : "Desativado");
+  Serial.println("---------------------------------------------------------");
+  delay(2000);
+
+}
