@@ -1,0 +1,124 @@
+#include <DHT.h>
+
+#define LDR_PIN A0
+
+// Ultrassônico HC-SR04
+#define TRIG 2
+#define ECHO 3
+
+// DHT11
+#define DHTPIN 4
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// LED RGB (cátodo comum)
+#define R_PIN 9
+#define G_PIN 10
+#define B_PIN 11
+
+// Botão liga/desliga
+#define BUTTON 7
+
+bool systemOn = false;
+bool lastButton = HIGH;
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(TRIG, OUTPUT);
+  pinMode(ECHO, INPUT);
+
+  pinMode(R_PIN, OUTPUT);
+  pinMode(G_PIN, OUTPUT);
+  pinMode(B_PIN, OUTPUT);
+
+  pinMode(BUTTON, INPUT_PULLUP);
+
+  dht.begin();
+}
+
+void loop() {
+
+  // -----------------------
+  // 1) Botão liga/desliga
+  // -----------------------
+  bool buttonState = digitalRead(BUTTON);
+
+  if (buttonState == LOW && lastButton == HIGH) {  
+    systemOn = !systemOn;  // alterna estado
+    delay(250);            // debounce
+  }
+  lastButton = buttonState;
+
+  // -----------------------
+  // 2) Se o sistema está desligado
+  // -----------------------
+  if (!systemOn) {
+    setColor(0, 0, 0); // LED apagado
+    return;            // não executa sensores
+  }
+
+  // --------------------------------------------------
+  // 3) LDR, Ultrassônico e DHT11 (com sistema ligado)
+  // --------------------------------------------------
+
+  // LDR
+  int ldrValue = analogRead(LDR_PIN);
+
+  // Ultrassônico
+  digitalWrite(TRIG, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG, LOW);
+
+  long duration = pulseIn(ECHO, HIGH);
+  int distance = duration * 0.034 / 2;  // cm
+
+  // DHT11
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+
+  // -----------------------
+  // 4) Impressão no serial
+  // -----------------------
+  Serial.print("LDR: ");
+  Serial.print(ldrValue);
+
+  Serial.print(" | Distancia: ");
+  Serial.print(distance);
+  Serial.print(" cm");
+
+  Serial.print(" | Humidade: ");
+  Serial.print(h);
+  Serial.print("%");
+
+  Serial.print(" | Temperatura: ");
+  Serial.print(t);
+  Serial.println(" °C");
+
+  // -----------------------
+  // 5) Controle de cor do LED RGB pelo DHT11
+  // -----------------------
+  if (isnan(t) || isnan(h)) {
+    // erro de leitura
+    setColor(255, 255, 0);  // Amarelo
+  }
+  else if (t < 20) {
+    setColor(0, 0, 255);    // Azul - frio
+  }
+  else if (t >= 20 && t <= 28) {
+    setColor(0, 255, 0);    // Verde - confortável
+  }
+  else {
+    setColor(255, 0, 0);    // Vermelho - quente
+  }
+
+  delay(500);
+}
+
+void setColor(int r, int g, int b) {
+  analogWrite(R_PIN, r);
+  analogWrite(G_PIN, g);
+  analogWrite(B_PIN, b);
+}
